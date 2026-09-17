@@ -1,0 +1,48 @@
+# 本地开发基础设施编排：不用 Docker 跑业务服务，只提供 MySQL 与 Redis。
+# API 与 wechat-pay-worker 由 ./scripts/run_local.sh 用项目 .venv 原生启动
+# （uvicorn --reload 热重载，改代码无需重建镜像）。生产部署请另建 compose 或 K8s 清单：
+# 不要复用本文件的明文口令、不要把 3306/6379 发布到公网。
+x-mysql-env: &mysql-env
+  # 口令来自根目录 .env（compose 插值只读 .env）。
+  # 改口令只对新建卷生效：已有 mysql_data 需手工 ALTER USER 或删除卷重建。
+  MYSQL_DATABASE: betel_lottery
+  MYSQL_USER: lottery
+  MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root123456}
+  MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment: *mysql-env
+    ports:
+      - "127.0.0.1:3306:3306"
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.2-alpine
+    environment:
+      # Redis 口令来自根目录 .env（compose 插值只读 .env），每次启动都会读取
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123456}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql_data:
+  redis_data:

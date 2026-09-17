@@ -1,0 +1,1 @@
+{"name":"h5","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"vite --port 5174","build":"vue-tsc -b && vite build"},"dependencies":{"@vitejs/plugin-vue":"^5.2.4","vant":"^4.9.20","vue":"^3.5.17","vue-router":"^4.5.1"},"devDependencies":{"typescript":"^5.8.3","vite":"^6.3.5","vue-tsc":"^2.2.10"}}

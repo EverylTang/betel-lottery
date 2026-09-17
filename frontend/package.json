@@ -1,0 +1,11 @@
+{
+  "name": "betel-lottery-frontend",
+  "private": true,
+  "workspaces": ["admin", "h5", "dealer"],
+  "scripts": {
+    "dev:admin": "npm run dev -w admin",
+    "dev:h5": "npm run dev -w h5",
+    "dev:dealer": "npm run dev -w dealer",
+    "build": "npm run build -w admin && npm run build -w h5 && npm run build -w dealer"
+  }
+}

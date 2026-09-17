@@ -1,0 +1,18 @@
+.env
+.venv/
+frontend/node_modules/
+frontend/*/node_modules/
+frontend/*/dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+alembic/versions/*.pyc
+
+# ngrok 联调覆盖层与本地密钥：均不得入库
+.env.ngrok
+.env.ngrok.*
+!.env.ngrok.example
+secrets/wechatpay/*
+!secrets/wechatpay/README.md
+frontend/h5/public/MP_verify_*.txt

@@ -1,0 +1,19 @@
+:root { color: #1d2b24; background: #f4f6f3; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1120px; background: #f4f6f3; }
+.shell { min-height: 100vh; }
+.sider { position: relative; background: #173b2d !important; padding: 18px 12px; }
+.side-brand { height: 52px; display: flex; align-items: center; gap: 10px; color: white; padding: 0 8px 18px; font-size: 16px; }
+.side-brand span, .brand-mark { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 6px; background: #d7e94b; color: #173b2d; font-weight: 800; }
+.sider .ant-menu { background: transparent; border-inline-end: none; }
+.sider .ant-menu-item-selected { background: #2c634b !important; }
+.side-footer { position: absolute; bottom: 28px; left: 22px; color: #d9e7df; line-height: 1.7; }.side-footer small { color: #8eafa0; }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 0 34px; background: #fff; border-bottom: 1px solid #e6ebe7; }
+.content { padding: 30px 34px; max-width: 1600px; width: 100%; margin: 0 auto; }.page-heading { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; }.page-heading h2 { margin: 0 0 5px !important; letter-spacing: 0; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }.metrics .ant-card, .dashboard-grid .ant-card { box-shadow: none; border-color: #e4e9e5; }.metrics .ant-statistic-title { color: #68776f; }
+.dashboard-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; }.trend-card { min-height: 300px; }.chart { height: 180px; padding: 30px 18px 4px; position: relative; background: repeating-linear-gradient(to bottom, transparent 0 44px, #edf1ee 45px); }.chart-line { position: absolute; inset: 54px 20px 34px; border-top: 2px solid #d7e94b; transform: skewY(-10deg); }.chart-points { height: 100%; display: flex; align-items: end; gap: 22px; position: relative; }.chart-points i { flex: 1; min-width: 14px; background: #257858; border-radius: 3px 3px 0 0; opacity: .9; }.chart-days { display: flex; justify-content: space-between; color: #758279; font-size: 12px; padding: 0 18px; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }.login-shell { min-height: 100vh; display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; padding: 8vw; background: #173b2d; }.login-brand { color: white; }.login-brand h1 { font-size: 44px; margin: 22px 0 10px; letter-spacing: 0; }.login-brand p { color: #b7ccbf; font-size: 16px; }.login-brand .brand-mark { width: 54px; height: 54px; font-size: 24px; }.login-card { padding: 20px; max-width: 410px; justify-self: end; width: 100%; border-radius: 8px; }.login-card h3 { margin-top: 0; }
+.prize-basic-fields { margin-top: 12px; }.prize-form-divider { margin: 18px 0 12px !important; }.prize-setting-field { margin-top: 12px; }.prize-stock-fields { margin-top: 12px; }
+.print-guide { margin: -8px 0 16px; background: #f3f8e9; border-inline-start: 3px solid #a9bd32 !important; }.print-guide .ant-card-body { display: flex; gap: 16px; align-items: baseline; padding: 13px 16px; }.print-guide b { color: #31523e; white-space: nowrap; }.print-guide span { color: #64776a; font-size: 13px; line-height: 1.65; }
+.distribution-card { margin-bottom: 18px; }.distribution-card .ant-table-wrapper { overflow-x: auto; }
+.activity-list { margin-bottom: 18px; }.activity-config { margin-bottom: 20px; }.config-summary { display: flex; gap: 24px; margin-bottom: 14px; color: #66756d; font-size: 13px; }.strategy-summary { padding: 12px 16px; background: #f3f8e9; border-left: 3px solid #a9bd32; align-items: center; flex-wrap: wrap; }.strategy-table { border-color: #dce7df; }.selected-row td { background: #eef7f1 !important; }.activity-list .ant-table-row { cursor: pointer; }
