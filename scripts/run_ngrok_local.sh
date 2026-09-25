@@ -40,6 +40,7 @@ wechat_ua='Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/60
 h5_pid=""
 ngrok_pid=""
 ngrok_log=""
+tunnel_url=""
 python_bin() {
   if [[ -x "${root_dir}/.venv/bin/python" ]]; then printf '%s' "${root_dir}/.venv/bin/python"
   else printf '%s' python3; fi
@@ -210,10 +211,10 @@ if rows:
 PYEOF
 }
 
-start_tunnel() {  # 输出 public_url<TAB>状态；NGROK_DRY_RUN=1 用于离线自测
+start_tunnel() {  # 设置 tunnel_url；NGROK_DRY_RUN=1 用于离线自测
   local api="${NGROK_INSPECT_API:-${ngrok_local_api}}"
   if [[ "${NGROK_DRY_RUN:-0}" == "1" ]]; then
-    printf '%s\t%s\n' "https://dry-run.ngrok-free.app" "up"
+    tunnel_url="https://dry-run.ngrok-free.app"
     return 0
   fi
   local args=(http "${h5_port}" "--log=stdout" "--log-format=logfmt" "--log-level=info")
@@ -233,7 +234,7 @@ start_tunnel() {  # 输出 public_url<TAB>状态；NGROK_DRY_RUN=1 用于离线�
     if line="$(inspect_tunnels "${api}")" && [[ -n "${line}" ]]; then
       url="${line%%$'\t'*}"; state="${line##*$'\t'}"
       if [[ "${state}" == "up" ]]; then
-        printf '%s\t%s\n' "${url}" "${state}"
+        tunnel_url="${url}"
         return 0
       fi
     fi
@@ -245,9 +246,10 @@ start_tunnel() {  # 输出 public_url<TAB>状态；NGROK_DRY_RUN=1 用于离线�
 }
 
 sync_config() {  # 把隧道域名写进覆盖层 env
-  local url="$1" domain="$2" origins trusted
+  local url="$1" domain="$2" origins trusted vite_allowed_hosts
   origins="https://${domain},http://localhost:5173,http://localhost:5174,http://localhost:5175"
   trusted="${domain},localhost,127.0.0.1"
+  vite_allowed_hosts="${domain},localhost,127.0.0.1"
   if [[ "${sync_env}" != "1" ]]; then
     log "NGROK_SYNC_ENV=0：请手动把下列值写入 ${env_file}"
     log "  H5_BASE_URL=${url}"
@@ -255,6 +257,7 @@ sync_config() {  # 把隧道域名写进覆盖层 env
     log "  WECHATPAY_NOTIFY_BASE_URL=${url}"
     log "  TRUSTED_HOSTS=${trusted}"
     log "  CORS_ORIGINS=${origins}"
+    log "  VITE_ALLOWED_HOSTS=${vite_allowed_hosts}"
     return 0
   fi
   write_env H5_BASE_URL "${url}"
@@ -262,7 +265,8 @@ sync_config() {  # 把隧道域名写进覆盖层 env
   write_env WECHATPAY_NOTIFY_BASE_URL "${url}"
   write_env TRUSTED_HOSTS "${trusted}"
   write_env CORS_ORIGINS "${origins}"
-  log "已写入 ${env_file}：H5_BASE_URL / WECHAT_OAUTH_REDIRECT_URI / WECHATPAY_NOTIFY_BASE_URL / TRUSTED_HOSTS / CORS_ORIGINS"
+  write_env VITE_ALLOWED_HOSTS "${vite_allowed_hosts}"
+  log "已写入 ${env_file}：隧道地址、OAuth/支付回调、可信主机、CORS 与 Vite Host 白名单"
 }
 
 restart_services() {
@@ -317,24 +321,24 @@ smoke_test() {
 run_default() {
   preflight
   wait_http "${local_api_url}/ready" 3 || die "本机 API 未就绪：${local_api_url}/ready。请先执行 ./scripts/run_local.sh。"
+  trap 'cleanup' EXIT INT TERM
+  local url domain
+  if ! start_tunnel; then
+    die "ngrok 隧道未就绪。请检查 authtoken、固定域名 ${ngrok_domain:-（未指定，使用临时域名）}，以及本机 4040 检查端口是否被其他 ngrok 实例占用。"
+  fi
+  url="${tunnel_url}"
+  domain="${url#*://}"
+  log "公网隧道地址：${url}"
   ( cd "${root_dir}/frontend" && VITE_API_PROXY_TARGET="${local_api_url}" \
       VITE_NGROK_SKIP_BROWSER_WARNING="${skip_browser_warning}" \
+      VITE_ALLOWED_HOSTS="${domain},localhost,127.0.0.1" \
       npm run dev -w h5 -- --host 0.0.0.0 --port "${h5_port}" ) &
   h5_pid=$!
-  trap 'cleanup' EXIT INT TERM
   if [[ "${NGROK_DRY_RUN:-0}" != "1" ]]; then
     if ! wait_http "http://127.0.0.1:${h5_port}/" 40; then
       die "H5 dev server 未能在 40 秒内监听 ${h5_port}。"
     fi
   fi
-  local line url domain
-  if ! line="$(start_tunnel)"; then
-    die "ngrok 隧道未就绪。请检查 authtoken、固定域名 ${ngrok_domain:-（未指定，使用临时域名）}，以及本机 4040 检查端口是否被其他 ngrok 实例占用。"
-  fi
-  url="${line%%$'\t'*}"
-  domain="${url#*://}"
-  log ""
-  log "公网隧道地址：${url}"
   log ""
   sync_config "${url}" "${domain}"
   restart_services

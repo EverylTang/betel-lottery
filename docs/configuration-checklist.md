@@ -123,13 +123,13 @@ npm --prefix frontend/h5 run build          # 另两端：admin、dealer
 | `app/core/http.py`（新） | `resolve_client_ip()` / `client_ip_or_unknown()`；`TRUSTED_PROXY_NETWORKS` 白名单 | 原来所有接口直接用 `request.client.host`。经 Vite/nginx/ngrok 后全部访客塌缩成同一个 IP：一个人就能把后台登录打到 429，审计日志也全失真。刻意不用 `is_private`，它把 `198.51.100.0/24` 等文档保留段也算内网 |
 | `app/core/config.py` | 新增 `trust_proxy_headers: bool = True` | 允许在 8000 直连公网时彻底退回“只认 socket 对端” |
 | `app/api/{admin,h5,dealer}.py` | 5 处取 IP 的调用点改走 helper | 统一入口，避免漏改 |
-| `frontend/h5/vite.config.ts` | `allowedHosts: true`、`xfwd: true`、按需注入 `ngrok-skip-browser-warning` | 临时隧道域名无法预置白名单；不透传 IP 则限流键全塌缩；免费隧道会拦掉 `/api` |
+| `frontend/h5/vite.config.ts` | 按当前 ngrok 域名和本机地址设置 `allowedHosts`、`xfwd: true`、按需注入 `ngrok-skip-browser-warning` | 临时隧道域名无法预置白名单；不透传 IP 则限流键全塌缩；免费隧道可能显示浏览器提示页 |
 | `frontend/{admin,dealer}/vite.config.ts` | `xfwd: true` | 同上 |
 | `.env.example` | 提供本机 `DATABASE_URL` / `REDIS_URL`、CORS 加 5175、`TRUST_PROXY_HEADERS` 和本机密钥路径 | 本机进程使用宿主机连接地址 |
 | `.env.ngrok.example`（新） | 覆盖层模板 | 见第 0 节 |
 | `frontend/h5/public/.gitkeep`、`secrets/wechatpay/README.md`（新） | 占位目录 | 保证 `MP_verify_*.txt` 与 PEM 有明确落点 |
 | `.gitignore` | 追加 `.env.ngrok*`、`secrets/wechatpay/*`、`MP_verify_*.txt` | 防私钥/校验文件入库 |
-| `scripts/run_ngrok_local.sh` | preflight 硬失败、`check` 子命令、隧道 URL 自动发现、5 键自动回写、原生进程重启、冒烟自检、`trap` 回收 | 原来要求手改 `.env` 且改完不生效 |
+| `scripts/run_ngrok_local.sh` | preflight 硬失败、`check` 子命令、隧道 URL 自动发现、6 键自动回写、原生进程重启、冒烟自检、`trap` 回收 | 原来要求手改 `.env` 且改完不生效 |
 | `scripts/set_admin_password.py`（新） | 重置/轮换后台口令 | `ADMIN_BOOTSTRAP_PASSWORD` 只在建号时生效，改 `.env` 是无效操作 |
 | `tests/test_client_ip.py`（新） | 14 项 IP 解析回归 | 锁住伪造 XFF、代理网段、开关关闭等行为 |
 

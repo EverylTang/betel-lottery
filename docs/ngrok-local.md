@@ -22,7 +22,7 @@
 
 > 关键约束：覆盖层里的 `JWT_SECRET` 必须与 `.env` 一致。二维码 `token_ciphertext`、中奖 token、会话都由它派生加密，改动会让已印刷二维码解密失败并踢掉全部登录态。
 
-需要人工填写的只有公众号凭据；隧道域名相关 5 个键（`H5_BASE_URL`、`WECHAT_OAUTH_REDIRECT_URI`、`WECHATPAY_NOTIFY_BASE_URL`、`TRUSTED_HOSTS`、`CORS_ORIGINS`）由脚本自动回写。完整配置项含义见 [`docs/configuration-checklist.md`](configuration-checklist.md)。
+需要人工填写的只有公众号凭据；隧道域名相关 6 个键（`H5_BASE_URL`、`WECHAT_OAUTH_REDIRECT_URI`、`WECHATPAY_NOTIFY_BASE_URL`、`TRUSTED_HOSTS`、`CORS_ORIGINS`、`VITE_ALLOWED_HOSTS`）由脚本自动回写。完整配置项含义见 [`docs/configuration-checklist.md`](configuration-checklist.md)。
 
 ## 前置条件
 
@@ -45,7 +45,7 @@ NGROK_DOMAIN=promo.example.ngrok.app ./scripts/run_ngrok_local.sh
 ./scripts/run_ngrok_local.sh
 ```
 
-脚本按顺序完成：环境自检 → 拉起 H5 dev server → 建立隧道 → 回写 `.env.ngrok` → 重启 api / wechat-pay-worker 原生进程 → 打印公众号后台要填的值 → 冒烟自检。结束时 `Ctrl-C`，`trap` 会同时回收 Vite 与 ngrok 子进程。
+脚本按顺序完成：环境自检 → 建立隧道并取得域名 → 用该域名配置 Vite Host 白名单并拉起 H5 dev server → 回写 `.env.ngrok` → 重启 api / wechat-pay-worker 原生进程 → 打印公众号后台要填的值 → 冒烟自检。结束时 `Ctrl-C`，`trap` 会同时回收 Vite 与 ngrok 进程。
 
 自检项（`preflight`）：
 - 未装 ngrok / authtoken 无效 → 直接失败；
