@@ -10,13 +10,11 @@
 
 | 层 | 位置 | 作用范围 |
 | --- | --- | --- |
-| 基础配置 | 根目录 `.env`（不入库） | 本机脚本、alembic、compose 的 `${...}` 插值、容器默认环境 |
-| 覆盖层 | 根目录 `.env.ngrok`（不入库，可选） | 只覆盖 `api` 与 `wechat-pay-worker` 容器的同名项；文件删除即回到纯本机 development |
+| 基础配置 | 根目录 `.env`（不入库） | API、worker、本机脚本和手动 Alembic 命令 |
+| 覆盖层 | 根目录 `.env.ngrok`（不入库，可选） | 覆盖本机 API 与 worker 进程的同名项；文件删除即回到纯本机 development |
 | 平台侧 | 微信公众号后台、微信支付商户平台 | 域名、JS 安全域名、商家转账产品/场景、AppID 绑定、通知地址 |
 
-优先级：`docker-compose.yml` 的 `environment` > `.env.ngrok` > `.env`。
-容器里 `DATABASE_URL`/`REDIS_URL` 被 `environment` 强制改成 `DOCKER_*` 的值，
-所以 **compose 插值永远只读 `.env`**，`.env.ngrok` 里的同名项不会改变容器内连接串。
+优先级：进程环境变量 > `.env.ngrok` > `.env`。`run_local.sh` 会先加载基础 `.env`，再加载可选覆盖层。
 
 ## 1. 环境变量
 
@@ -26,17 +24,16 @@
 | --- | --- | --- |
 | `DATABASE_URL` | 必须以 `mysql+pymysql://` 开头 | 抛错拒绝启动；SQLite 不被支持 |
 | `REDIS_URL` | `redis://` 或 `rediss://`；带口令时形如 `redis://:口令@127.0.0.1:6379/0` | 抛错拒绝启动；Redis 掉线时限流接口一律 503（fail-closed） |
-| `DOCKER_DATABASE_URL` / `DOCKER_REDIS_URL` | 容器内地址，主机名用服务名 `mysql` / `redis`，端口是容器自己的 `3306` / `6379` | 用 `127.0.0.1` 会让容器连不上；用宿主发布端口 3306/6379 同样错 |
-| `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` | MySQL 容器初始化口令，compose 已改为从这里读取 | 只在建卷时生效；改口令要 `ALTER USER` 或删卷重建，且必须与两条 URL 同步 |
+| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` | `scripts/backup_mysql.sh` 使用的备份连接信息 | 仅备份时需要；应与数据库账户及 `DATABASE_URL` 对应 |
 | `JWT_SECRET` | 同时用于：会话 JWT 签名、二维码 `token_ciphertext` 的 Fernet 密钥派生 | **三处耦合**：改动会踢掉全部登录态，并让已印刷二维码解密失败（开奖返回 409）。`.env` 与 `.env.ngrok` 必须一致；生产才允许换强随机值 |
 | `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD` | 仅在 admin 行不存在时建号 | 改 `.env` **不会**更新已存在的口令；隧道/公网暴露前用 `.venv/bin/python -m scripts.set_admin_password` 重置 |
 
-端口对照（`docker compose` 默认只绑回环）：
+本机开发端口参考：
 
-| 服务 | 宿主机 | 容器内 |
+| 服务 | 地址来源 | 部署方式 |
 | --- | --- | --- |
-| MySQL（root 口令 `root123456`） | `127.0.0.1:3306` | `mysql:3306` |
-| Redis（口令 `redis123456`） | `127.0.0.1:6379` | `redis:6379` |
+| MySQL | 由 `DATABASE_URL` 指定 | 外部服务 |
+| Redis | 由 `REDIS_URL` 指定 | 外部服务 |
 | API | `127.0.0.1:8000` | `8000` |
 
 ### 1.2 安全与审计
@@ -62,7 +59,7 @@ AppID/AppSecret、`WECHAT_OAUTH_REDIRECT_URI` 完整 HTTPS、商户号+序列号
 | --- | --- |
 | `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 已认证服务号；现金转账要求与商户号同主体或已授权 |
 | `WECHAT_OAUTH_SCOPE` | 默认 `snsapi_base`（静默授权，够用于取 OpenID） |
-| `WECHAT_OAUTH_REDIRECT_URI` | 必须是完整 HTTPS 回调地址，路径固定 `/api/h5/auth/wechat/callback`，域名与“网页授权域名”一致。留空时由请求头推导，代理/容器环境极易推错 |
+| `WECHAT_OAUTH_REDIRECT_URI` | 必须是完整 HTTPS 回调地址，路径固定 `/api/h5/auth/wechat/callback`，域名与“网页授权域名”一致。留空时由请求头推导，反向代理环境容易推错 |
 | `H5_BASE_URL` | OAuth 回跳、JS-SDK 签名域名校验、二维码印刷链接三处共用。**ngrok 本机联调不带子路径**；写成 `https://域名/scan` 会让签名与回跳 404 |
 
 模式判定：`ENVIRONMENT` ∈ {staging, production} **且** AppID/AppSecret 非空 → 启用真实 OAuth，
@@ -74,7 +71,7 @@ AppID/AppSecret、`WECHAT_OAUTH_REDIRECT_URI` 完整 HTTPS、商户号+序列号
 | --- | --- |
 | `WECHATPAY_ENABLED` | `false` 时不创建转账单；MVP 已移除人工登记现金入口，所以 `false` 下现金奖只会停在待领取 |
 | `WECHATPAY_MCHID` / `WECHATPAY_MCH_SERIAL_NO` | 商户号需开通商家转账并绑定该服务号 AppID |
-| `WECHATPAY_MCH_PRIVATE_KEY_PATH` | 商户 API 私钥 `apiclient_key.pem` 的**容器内路径**，本地 compose 为 `/run/secrets/wechatpay/...` |
+| `WECHATPAY_MCH_PRIVATE_KEY_PATH` | 商户 API 私钥 `apiclient_key.pem` 的本机文件路径 |
 | `WECHATPAY_MCH_PUBLIC_KEY_ID` / `..._PATH` | 微信支付**平台**公钥（不是商户证书），回调验签用；轮换时 ID 与文件必须一起换 |
 | `WECHATPAY_API_V3_KEY` | 恰好 32 字符，AES-256-GCM 解密回调 resource |
 | `WECHATPAY_NOTIFY_BASE_URL` | 无路径 HTTPS 基址，最终回调 `{base}/api/wechat-pay/notify`；生产不得由 `H5_BASE_URL` 推导 |
@@ -91,15 +88,11 @@ AppID/AppSecret、`WECHAT_OAUTH_REDIRECT_URI` 完整 HTTPS、商户号+序列号
 ### 1.5 密钥文件位置
 
 ```text
-secrets/wechatpay/apiclient_key.pem            → 容器 /run/secrets/wechatpay/apiclient_key.pem
-secrets/wechatpay/wechatpay_public_key.pem     → 容器 /run/secrets/wechatpay/wechatpay_public_key.pem
+secrets/wechatpay/apiclient_key.pem
+secrets/wechatpay/wechatpay_public_key.pem
 ```
 
-compose 已把该目录只读挂给 `api` 与 `wechat-pay-worker`（同一份文件）。宿主机目录由
-`WECHATPAY_SECRET_DIR` 控制（默认 `./secrets/wechatpay`）——它是 **compose 变量插值**，
-所以只认根目录 `.env`，写在 `.env.ngrok` 里无效；`scripts/run_ngrok_local.sh` 的自检也按同一
-顺序（shell 变量 > `.env` > 默认值）解析，两边看到的目录始终一致。
-目录内容、`.env`、`.env.ngrok` 均在 `.gitignore` 内；生产请改用受限路径或 docker secret，并 `chmod 600`。
+宿主机目录由 `WECHATPAY_SECRET_DIR` 控制（默认 `./secrets/wechatpay`）；`scripts/run_ngrok_local.sh` 的自检按 shell 变量 > `.env` > 默认值解析。目录内容、`.env`、`.env.ngrok` 均在 `.gitignore` 内；生产请使用受限密钥目录并 `chmod 600`。
 
 ## 2. 微信后台侧必须完成的动作
 
@@ -119,9 +112,8 @@ compose 已把该目录只读挂给 `api` 与 `wechat-pay-worker`（同一份文
 ./.venv/bin/python -m compileall -q app scripts
 ./.venv/bin/pytest -q
 npm --prefix frontend/h5 run build          # 另两端：admin、dealer
-docker compose config --quiet               # 校验编排与插值
 ./scripts/run_ngrok_local.sh check          # 隧道配置一致性体检
-docker compose exec -T redis redis-cli keys 'rate:admin-login:*'   # 确认限流键里是真实来源 IP
+./.venv/bin/python -c 'from app.cache import redis_client; print(list(redis_client.scan_iter(match="rate:admin-login:*")))'
 ```
 
 ## 4. 本次已经在仓库里改好的地方
@@ -131,23 +123,22 @@ docker compose exec -T redis redis-cli keys 'rate:admin-login:*'   # 确认限�
 | `app/core/http.py`（新） | `resolve_client_ip()` / `client_ip_or_unknown()`；`TRUSTED_PROXY_NETWORKS` 白名单 | 原来所有接口直接用 `request.client.host`。经 Vite/nginx/ngrok 后全部访客塌缩成同一个 IP：一个人就能把后台登录打到 429，审计日志也全失真。刻意不用 `is_private`，它把 `198.51.100.0/24` 等文档保留段也算内网 |
 | `app/core/config.py` | 新增 `trust_proxy_headers: bool = True` | 允许在 8000 直连公网时彻底退回“只认 socket 对端” |
 | `app/api/{admin,h5,dealer}.py` | 5 处取 IP 的调用点改走 helper | 统一入口，避免漏改 |
-| `docker-compose.yml` | `env_file: [.env, .env.ngrok(可选)]`；`${WECHATPAY_SECRET_DIR:-./secrets/wechatpay}:/run/secrets/wechatpay:ro`；三个端口全部只绑 `127.0.0.1`；MySQL 口令从 `.env` 插值 | 原来密钥路径写死在镜像假设里、端口默认发布到 `0.0.0.0`、口令是明文硬编码 |
 | `frontend/h5/vite.config.ts` | `allowedHosts: true`、`xfwd: true`、按需注入 `ngrok-skip-browser-warning` | 临时隧道域名无法预置白名单；不透传 IP 则限流键全塌缩；免费隧道会拦掉 `/api` |
 | `frontend/{admin,dealer}/vite.config.ts` | `xfwd: true` | 同上 |
-| `.env.example` | 修端口（3306/6379）、补 `DOCKER_*` / `MYSQL_*` / `REDIS_PASSWORD`、CORS 加 5175、`TRUST_PROXY_HEADERS`、密钥路径改 `/run/secrets/wechatpay/...` | 原模板照抄会直接连不上 |
+| `.env.example` | 提供本机 `DATABASE_URL` / `REDIS_URL`、CORS 加 5175、`TRUST_PROXY_HEADERS` 和本机密钥路径 | 本机进程使用宿主机连接地址 |
 | `.env.ngrok.example`（新） | 覆盖层模板 | 见第 0 节 |
 | `frontend/h5/public/.gitkeep`、`secrets/wechatpay/README.md`（新） | 占位目录 | 保证 `MP_verify_*.txt` 与 PEM 有明确落点 |
 | `.gitignore` | 追加 `.env.ngrok*`、`secrets/wechatpay/*`、`MP_verify_*.txt` | 防私钥/校验文件入库 |
-| `scripts/run_ngrok_local.sh` | 重写：preflight 硬失败、`check` 子命令、隧道 URL 自动发现、5 键自动回写、默认 `--build` 重建、冒烟自检、`trap` 回收 | 原来要求手改 `.env` 且改完不生效 |
+| `scripts/run_ngrok_local.sh` | preflight 硬失败、`check` 子命令、隧道 URL 自动发现、5 键自动回写、原生进程重启、冒烟自检、`trap` 回收 | 原来要求手改 `.env` 且改完不生效 |
 | `scripts/set_admin_password.py`（新） | 重置/轮换后台口令 | `ADMIN_BOOTSTRAP_PASSWORD` 只在建号时生效，改 `.env` 是无效操作 |
 | `tests/test_client_ip.py`（新） | 14 项 IP 解析回归 | 锁住伪造 XFF、代理网段、开关关闭等行为 |
 
 ## 5. 仍需要你决策/提供的事项
 
-1. **Alembic 从未被调用**：`bootstrap_data()` 用 `create_all()` + 手写 `ALTER TABLE` 建列。要么规定“迁移一律 `alembic upgrade head`，并补齐 revision”，要么删掉 `alembic/` 目录避免双头维护。当前状态下升级旧库有“启动正常、写入缺列”的风险。
+1. **数据库初始化/升级需显式操作**：服务启动不创建表、不补列、不运行 Alembic。空库可手动运行 `python -m scripts.init_db` 创建当前模型的表；该命令不迁移已有表。Alembic revision 不是完整空库基线，升级旧库前需备份并核对 revision 与模型差异，再手动执行适用迁移。
 2. **前端生产 nginx/静态托管配置缺失**：仓库里没有生产用 nginx 模板，`/api` 路由、`MP_verify` 归属校验、SPA history 回退都靠部署方自建。需要的话我可以补一份带正确 `X-Forwarded-For` 覆盖写法的模板（写法要求见 `wechat-production.md`）。
 3. **ngrok 固定域名**：现在是免费临时域名 `storm-driving-upon.ngrok-free.dev`，重启即变、且对浏览器 UA 插入提示页。建议 ngrok 里领取/购买 static domain 后用 `NGROK_DOMAIN=...` 启动，并在微信后台一次性配好。
-4. **Redis 口令**：compose 已通过 `--requirepass` 启用口令 `redis123456`，连接串必须写成 `redis://:redis123456@host:6379/0` 形式。生产必须另设强口令 + 独立网络。
+4. **Redis 认证**：如 Redis 启用认证，连接串需包含口令。生产必须使用强口令、隔离网络并限制访问。
 5. **临时域名不要接真实资金**：ngrok 隧道只用于 OAuth/流程联调，最多 0.30 元小额验证；正式活动必须迁到自有 HTTPS 服务器。
 6. **真实微信凭据待填**：`.env.ngrok` 里 `WECHAT_APP_ID`/`WECHAT_APP_SECRET` 目前为空（`oauth_enabled=false`，H5 走 dev-login 预览），商户号相关全部为空。
 7. **口令落盘位置**：admin 口令已重置为随机强值，同一个值已同步写进 `.env.ngrok` 的 `ADMIN_BOOTSTRAP_PASSWORD`；明文另存了一份在 `/tmp/betel_admin_pw.txt`（未进仓库）。确认可登录后请删除该临时文件，并按需再轮换一次。

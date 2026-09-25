@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# 本地开发启动器：只用 Docker 跑 MySQL/Redis（基础设施），
-# API 与 wechat-pay-worker 用项目 .venv 原生运行（uvicorn --reload 热重载）。
+# 本地开发启动器：API、wechat-pay-worker 和前端均用宿主机进程运行。
+# MySQL/Redis 需要由外部服务或本机服务预先提供。
 #
 # 用法：
-#   ./scripts/run_local.sh                   # 启动 MySQL/Redis + 迁移 + API + worker
-#   ./scripts/run_local.sh api|worker        # 只启动其中一个服务（同样先拉起基础设施）
+#   ./scripts/run_local.sh                   # 启动 API + worker
+#   ./scripts/run_local.sh api|worker        # 只启动其中一个服务
 #   ./scripts/run_local.sh --frontends       # 额外启动 admin/h5/dealer 三个前端 dev server
-#   ./scripts/run_local.sh infra             # 只确保 MySQL/Redis 容器就绪
-#   ./scripts/run_local.sh stop              # 停止 API/worker/前端（MySQL/Redis 保留）
+#   ./scripts/run_local.sh infra             # 检查 MySQL/Redis 是否可连接
+#   ./scripts/run_local.sh stop              # 停止 API/worker/前端
 #   ./scripts/run_local.sh restart           # 重启 API/worker（ngrok 脚本回写 .env.ngrok 后使用）
 #   ./scripts/run_local.sh status            # 查看运行状态
 #   ./scripts/run_local.sh logs [api|worker|fe-admin|fe-h5|fe-dealer] [-f]
@@ -17,8 +17,7 @@
 #   API_PORT=8000        覆盖 API 端口
 #   NGROK_ENV_FILE       .env.ngrok 覆盖层的路径（与 run_ngrok_local.sh 保持一致）
 #
-# 配置分层与容器时代一致：基础 .env 由 pydantic-settings 读取；如果存在 .env.ngrok，
-# 本脚本会把它导出到进程环境以覆盖 .env（等价于 compose 的 env_file 第二层）。
+# 基础 .env 由 pydantic-settings 读取；如果存在 .env.ngrok，本脚本会把它导出到进程环境覆盖 .env。
 
 set -euo pipefail
 
@@ -55,7 +54,7 @@ trim() { # trim STRING
   printf '%s' "${s}"
 }
 
-# 存在 .env.ngrok 时导出到环境，覆盖 .env（后出现的文件优先，与旧 compose env_file 一致）
+# 存在 .env.ngrok 时导出到环境，覆盖 .env（后出现的文件优先）
 load_overlay() {
   local file="${NGROK_ENV_FILE:-${root_dir}/.env.ngrok}"
   [[ -f "${file}" ]] || return 0
@@ -86,36 +85,22 @@ wait_http() { # wait_http URL 超时秒
   return 1
 }
 
-infra_healthy() { # infra_healthy SERVICE
-  local service="$1" cid status
-  cid="$(docker compose ps -q "${service}" 2>/dev/null || true)"
-  [[ -n "${cid}" ]] || return 1
-  status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}" 2>/dev/null || true)"
-  [[ "${status}" == "healthy" ]]
-}
+check_dependencies() { # 检查外部 MySQL/Redis
+  log "检查 MySQL / Redis 连接……"
+  if ! ./.venv/bin/python - <<'PY'
+from app.cache import check_redis
+from app.db import engine
+from sqlalchemy import text
+from sqlmodel import Session
 
-ensure_infra() { # 只用 Docker 跑 MySQL/Redis
-  if ! command -v docker >/dev/null 2>&1; then
-    die "未找到 docker：本地只有 MySQL/Redis 走容器，请先安装并启动 Docker（如 Docker Desktop）。"
-  fi
-  log "确保 MySQL/Redis 容器就绪（docker compose up -d mysql redis）……"
-  docker compose up -d mysql redis
-  local i
-  for ((i = 0; i < 120; i++)); do
-    if infra_healthy mysql && infra_healthy redis; then
-      log "MySQL / Redis 已就绪（127.0.0.1:3306 / 127.0.0.1:6379）。"
-      return 0
-    fi
-    sleep 1
-  done
-  die "MySQL/Redis 在 120 秒内未就绪：执行 docker compose ps、docker compose logs mysql redis 查看。"
-}
-
-run_migrations() {
-  log "数据库迁移：alembic upgrade head ……"
-  if ! ./.venv/bin/alembic upgrade head >"${LOG_DIR}/alembic.log" 2>&1; then
-    warn "alembic upgrade head 失败（全新空库没有版本基线时属正常），日志：${LOG_DIR}/alembic.log"
-    warn "继续启动：应用启动时 create_all 会补建缺失的表（见 docs/deployment.md 第 5 节）。"
+with Session(engine) as session:
+    session.exec(text("SELECT 1")).one()
+if not check_redis():
+    raise RuntimeError("Redis 不可用")
+print("MySQL / Redis 已就绪")
+PY
+  then
+    die "MySQL/Redis 不可用：请先启动外部服务，并检查 DATABASE_URL / REDIS_URL。"
   fi
 }
 
@@ -224,12 +209,11 @@ stop_all() {
   stop_one "${fe_admin_pid_file}" "frontend/admin"
   stop_one "${fe_h5_pid_file}" "frontend/h5"
   stop_one "${fe_dealer_pid_file}" "frontend/dealer"
-  log "本地进程已停止（MySQL/Redis 容器保留，数据不丢）。"
+  log "本地应用进程已停止；外部 MySQL/Redis 不受影响。"
 }
 
 cmd_start() { # cmd_start [api|worker|both]
-  ensure_infra
-  run_migrations
+  check_dependencies
   case "${1:-both}" in
     api)    start_api ;;
     worker) start_worker ;;
@@ -245,10 +229,11 @@ cmd_up() {
   fi
   log ""
   log "本地服务已启动：API（127.0.0.1:${API_PORT}）+ wechat-pay-worker。"
+  log "启动不修改数据库结构；空库初始化或已有库升级需按部署文档手动执行。"
   log "停止：./scripts/run_local.sh stop；日志：./scripts/run_local.sh logs [api|worker|fe-admin|fe-h5|fe-dealer] [-f]"
 }
 
-cmd_restart() { # 仅重启 API/worker（不碰前端与 MySQL/Redis）
+cmd_restart() { # 仅重启 API/worker（不碰前端与外部依赖）
   stop_one "${worker_pid_file}" "wechat-pay-worker"
   stop_one "${api_pid_file}" "API"
   cmd_start both
@@ -309,7 +294,7 @@ case "${cmd}" in
   up)       cmd_up "${positional[@]:1}" ;;
   api)      cmd_start api ;;
   worker)   cmd_start worker ;;
-  infra)    ensure_infra ;;
+  infra)    check_dependencies ;;
   stop)     stop_all ;;
   restart)  cmd_restart ;;
   status)   status ;;

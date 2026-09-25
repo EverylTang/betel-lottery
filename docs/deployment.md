@@ -1,6 +1,6 @@
 # 部署文档
 
-本文根据当前仓库配置编写，适用于本地 Docker、开发联调和生产部署。所有示例中的密码、密钥、AppID、域名均为占位符，禁止直接使用或提交真实凭据。
+本文适用于本机进程开发和生产部署。MySQL、Redis 由本机安装或外部平台提供；仓库不负责启动基础设施。所有示例中的密码、密钥、AppID、域名均为占位符，禁止直接使用或提交真实凭据。
 
 ## 1. 部署前准备
 
@@ -8,9 +8,9 @@
 
 建议准备：
 
-- Docker、Docker Compose
 - Python 3.12；本地开发建议使用仓库中的 `.venv`
 - Node.js 和 npm
+- 可连接的 MySQL 8.4 与 Redis 7.2 服务
 - 生产环境的 HTTPS 域名、反向代理和受限密钥目录
 - 需要微信能力时，准备已认证服务号和已开通商家转账的微信支付商户号
 
@@ -24,18 +24,15 @@ cp .env.example .env
 
 ## 2. 环境变量填写
 
-以 `.env.example` 为准填写根目录 `.env`。本地脚本和宿主机执行的 Alembic 使用 `DATABASE_URL`、`REDIS_URL`；容器中的 API 和 worker 使用 `DOCKER_DATABASE_URL`、`DOCKER_REDIS_URL`。
+以 `.env.example` 为准填写根目录 `.env`。API、worker、脚本和 Alembic 均使用 `DATABASE_URL`、`REDIS_URL`，连接地址应指向已运行的服务。
 
 ### 2.1 本地必填或建议修改
 
 ```dotenv
 ENVIRONMENT=development
-MYSQL_ROOT_PASSWORD=<本地随机口令>
 MYSQL_PASSWORD=<本地随机口令>
 DATABASE_URL=mysql+pymysql://root:<root口令>@127.0.0.1:3306/betel_lottery?charset=utf8mb4
 REDIS_URL=redis://:redis123456@127.0.0.1:6379/0
-DOCKER_DATABASE_URL=mysql+pymysql://root:<root口令>@mysql:3306/betel_lottery?charset=utf8mb4
-DOCKER_REDIS_URL=redis://:redis123456@redis:6379/0
 JWT_SECRET=<至少32位随机字符串>
 ADMIN_BOOTSTRAP_USERNAME=admin
 ADMIN_BOOTSTRAP_PASSWORD=<仅用于首次建号的随机强口令>
@@ -47,7 +44,7 @@ TRUST_PROXY_HEADERS=true
 WECHATPAY_ENABLED=false
 ```
 
-`docker-compose.yml` 中 MySQL、Redis 和 API 端口只绑定到 `127.0.0.1`：MySQL 为 `3306`，Redis 为 `6379`，API 为 `8000`。不要把这些端口直接暴露到公网。
+MySQL、Redis 的地址与端口完全由 `DATABASE_URL`、`REDIS_URL` 决定。不要把数据库或 Redis 端口暴露到公网。
 
 ### 2.2 微信 OAuth 配置
 
@@ -76,15 +73,15 @@ WECHATPAY_ENABLED=false
 WECHATPAY_ENABLED=true
 WECHATPAY_MCHID=<商户号>
 WECHATPAY_MCH_SERIAL_NO=<商户API证书序列号>
-WECHATPAY_MCH_PRIVATE_KEY_PATH=/run/secrets/wechatpay/apiclient_key.pem
+WECHATPAY_MCH_PRIVATE_KEY_PATH=/absolute/path/to/apiclient_key.pem
 WECHATPAY_MCH_PUBLIC_KEY_ID=<微信支付平台公钥ID>
-WECHATPAY_MCH_PUBLIC_KEY_PATH=/run/secrets/wechatpay/wechatpay_public_key.pem
+WECHATPAY_MCH_PUBLIC_KEY_PATH=/absolute/path/to/wechatpay_public_key.pem
 WECHATPAY_API_V3_KEY=<恰好32位APIv3密钥>
 WECHATPAY_NOTIFY_BASE_URL=https://<API域名>
 WECHATPAY_SCENE_ID=1000
 ```
 
-开发 Compose 会把宿主机的 `WECHATPAY_SECRET_DIR` 只读挂载到容器 `/run/secrets/wechatpay`。本地联调目录可使用 `secrets/wechatpay`，文件名必须为 `apiclient_key.pem` 和 `wechatpay_public_key.pem`，权限建议为 `600`。生产环境使用独立的 secret 管理方案或受限目录，不要把 PEM 内容写入 `.env`、镜像或前端。
+本地联调可把 PEM 放在 `secrets/wechatpay/`，文件名为 `apiclient_key.pem` 和 `wechatpay_public_key.pem`，权限建议为 `600`。生产环境使用受限密钥目录或 secret 管理方案，不要把 PEM 内容写入版本库或前端。
 
 微信支付通知地址为：
 
@@ -94,21 +91,20 @@ https://<API域名>/api/wechat-pay/notify
 
 商户平台必须开通商家转账、绑定公众号 AppID、完成营销场景报备，并保证通知地址公网 HTTPS 可访问。
 
-## 3. 本地 Docker 部署
+## 3. 初始化与本地运行
 
-首次启动：
+先自行启动 MySQL、Redis，并确认 `.env` 中的连接串可用。首次使用空数据库时，显式创建当前模型所需的表：
 
 ```bash
-docker compose config --quiet
-docker compose up -d --build
+./.venv/bin/python -m scripts.init_db
 ```
 
-查看状态和日志：
+该命令只创建不存在的表，不会修改已有表结构。不要对已有业务库运行它来代替升级迁移。
+
+启动 API、worker 与三个前端开发服务器：
 
 ```bash
-docker compose ps
-docker compose logs -f api
-docker compose logs -f wechat-pay-worker
+./scripts/run_local.sh --frontends
 ```
 
 访问地址：
@@ -121,13 +117,13 @@ docker compose logs -f wechat-pay-worker
 | API 文档 | `http://localhost:8000/docs` |
 | 就绪检查 | `http://localhost:8000/ready` |
 
-停止服务：
+停止 API、worker 和前端开发服务器：
 
 ```bash
-docker compose down
+./scripts/run_local.sh stop
 ```
 
-仅停止容器而保留 MySQL、Redis 数据卷时使用 `docker compose down`。不要在需要保留数据时使用 `docker compose down -v`。
+外部 MySQL、Redis 由其自身服务管理，不会被该脚本停止。
 
 ## 4. 开发启动
 
@@ -145,15 +141,17 @@ npm --prefix frontend/h5 run dev
 npm --prefix frontend/dealer run dev
 ```
 
-开发时需先启动 MySQL 和 Redis，或先执行 `docker compose up -d mysql redis`。修改 `app/` 或 `scripts/` 后，Docker 容器需要重新构建：
+开发时需先启动 MySQL 和 Redis。`run_local.sh` 会检查两者可连接，但不负责启动它们。修改 `app/` 或 `scripts/` 后，本机 API 热重载，无需重建镜像。
 
 ```bash
-docker compose up -d --build api wechat-pay-worker
+./scripts/run_local.sh restart
 ```
 
 ## 5. 数据库初始化与迁移
 
-当前应用启动时会通过 `bootstrap_data()` 执行 `create_all()` 并补充部分字段；应用启动不会自动调用 Alembic。首次本地启动通常可由应用完成建表。
+应用启动不会执行 `create_all()`、`ALTER TABLE` 或 Alembic。管理员账号仅在表结构已就绪且账号不存在时创建。
+
+首次创建空数据库时，使用 `scripts.init_db` 手动创建表。它不会更新已有表。
 
 仓库仍包含 Alembic。已有数据库升级前先备份，再检查 revision 与模型差异：
 
@@ -168,7 +166,7 @@ docker compose up -d --build api wechat-pay-worker
 ./.venv/bin/alembic current
 ```
 
-当前项目的迁移和启动建表逻辑并非完全统一。生产升级必须核对 `alembic/versions/`、`app/models.py` 和启动期补列逻辑，避免出现服务启动成功但写入缺列的情况。
+当前 Alembic revision 不是完整的空库初始化基线。已有数据库升级前必须备份，并核对 `alembic/versions/`、当前模型和目标数据库的 revision；只在确认迁移适用后手动执行。服务启动不会代替或触发迁移。
 
 ## 6. 管理员初始化与密码轮换
 
@@ -180,17 +178,17 @@ docker compose up -d --build api wechat-pay-worker
 ./.venv/bin/python -m scripts.set_admin_password --username admin
 ```
 
-容器内轮换口令时，将口令通过外部环境变量 `BETEL_ADMIN_PASSWORD` 提供：
+自动化轮换时，将口令通过外部环境变量 `BETEL_ADMIN_PASSWORD` 提供：
 
 ```bash
-BETEL_ADMIN_PASSWORD='<随机强口令>' docker compose exec -T api python -m scripts.set_admin_password --username admin --password-from-env
+BETEL_ADMIN_PASSWORD='<随机强口令>' ./.venv/bin/python -m scripts.set_admin_password --username admin --password-from-env
 ```
 
 不要把口令写入命令历史、文档、日志或版本库。生产管理员口令至少使用随机强口令，并在首次登录后再次轮换。
 
 ## 7. 生产配置
 
-当前 `docker-compose.yml` 主要用于本地和联调，生产不要直接复用其中的明文默认口令。生产应使用独立 Compose、Kubernetes 或云平台编排，并满足：
+生产环境应由 systemd、进程管理器或平台服务管理 API 与 worker；MySQL、Redis、静态前端托管和 HTTPS 反向代理由部署环境提供，并满足：
 
 ```dotenv
 ENVIRONMENT=production
@@ -204,7 +202,7 @@ TRUST_PROXY_HEADERS=true
 JWT_SECRET=<至少32位随机字符串>
 ```
 
-生产启动校验要求 HTTPS 地址、强 JWT 密钥、强管理员初始口令、微信支付必要字段和可用的密钥路径。Redis 当前本地 Compose 未设置密码，生产必须增加认证、隔离网络并限制访问。个人数据保留任务 `scripts/run_retention.py` 没有内置调度器，应按业务要求配置 cron 或任务平台定期运行。
+生产启动校验要求 HTTPS 地址、强 JWT 密钥、强管理员初始口令、微信支付必要字段和可用的密钥路径。生产 Redis 必须启用认证、隔离网络并限制访问。个人数据保留任务 `scripts/run_retention.py` 没有内置调度器，应按业务要求配置 cron 或任务平台定期运行。
 
 ## 8. Nginx 反向代理
 
@@ -264,15 +262,13 @@ NGROK_DOMAIN=<预留域名> ./scripts/run_ngrok_local.sh
 npm --prefix frontend/admin run build
 npm --prefix frontend/h5 run build
 npm --prefix frontend/dealer run build
-docker compose config --quiet
 ```
 
 服务验证：
 
 ```bash
 curl -fsS http://127.0.0.1:8000/ready
-docker compose ps
-docker compose exec -T api python -c 'import os;p=[os.environ.get(k,"") for k in ("WECHATPAY_MCH_PRIVATE_KEY_PATH","WECHATPAY_MCH_PUBLIC_KEY_PATH")];print([(x, os.access(x, os.R_OK) if x else "UNSET") for x in p])'
+./.venv/bin/python -c 'import os; from app.core.config import get_settings; s=get_settings(); p=[s.wechatpay_mch_private_key_path,s.wechatpay_mch_public_key_path]; print([(x, os.access(x, os.R_OK)) for x in p])'
 ```
 
 生产上线还应验证：
@@ -286,20 +282,20 @@ docker compose exec -T api python -c 'import os;p=[os.environ.get(k,"") for k in
 
 ## 11. 常见问题
 
-### API 容器无法连接 MySQL 或 Redis
+### API 进程无法连接 MySQL 或 Redis
 
-确认容器使用的是 `DOCKER_DATABASE_URL` 和 `DOCKER_REDIS_URL`，主机名应为 `mysql`、`redis`，端口应为容器端口 `3306`、`6379`。宿主机脚本才使用 `127.0.0.1:3306`、`127.0.0.1:6379`（Redis 连接串需带口令，如 `redis://:redis123456@127.0.0.1:6379/0`）。
+确认 `.env` 中 `DATABASE_URL` 和 `REDIS_URL` 指向可达的外部服务，Redis 启用认证时将口令放入 URL。
 
 ### 修改 `.env` 后管理员口令没有变化
 
 初始化变量只在账号不存在时使用。使用 `scripts.set_admin_password` 轮换，不要删除生产账号或直接修改数据库密码字段。
 
-### 修改 Python 代码后容器仍运行旧代码
+### 修改 Python 代码后改动没有生效
 
-镜像在构建时复制 `app` 和 `scripts`，不是 bind mount。执行：
+默认本地启动器使用 `uvicorn --reload`；非 reload 模式下重启 API 或 worker：
 
 ```bash
-docker compose up -d --build api wechat-pay-worker
+./scripts/run_local.sh restart
 ```
 
 ### 微信 OAuth 回调失败
@@ -312,11 +308,11 @@ docker compose up -d --build api wechat-pay-worker
 
 ### ngrok 浏览器打开空白或显示拦截页
 
-免费 ngrok 可能注入浏览器提示页。先在同一浏览器会话访问隧道并选择 Visit Site；同时执行 `./scripts/run_ngrok_local.sh check` 检查域名和容器配置。
+免费 ngrok 可能注入浏览器提示页。先在同一浏览器会话访问隧道并选择 Visit Site；同时执行 `./scripts/run_ngrok_local.sh check` 检查域名和 API 代理配置。
 
 ### 数据库升级后运行时报缺少字段
 
-当前启动建表和 Alembic 并非完全统一。先备份数据库，核对模型、revision 和启动期补列逻辑，再执行 `./.venv/bin/alembic upgrade head` 并检查 `alembic current`。
+应用启动不修改表结构。先备份数据库，核对模型、revision 和目标数据库当前版本，再手动执行适用的升级迁移；不要对已有业务库运行 `scripts.init_db`。
 
 ### 生产环境获取到错误客户端 IP
 

@@ -63,7 +63,7 @@ warn() { printf '! %s\n' "$*" >&2; }
 read_env() {  # read_env KEY -> 值（覆盖层优先，其次基础 .env，都没有时返回空）
   local value
   value="$(_read_key "${env_file}" "$1")"
-  # 覆盖层没这个键时回落到基础 .env，与 compose 的 env_file 优先级保持一致。
+  # 覆盖层没这个键时回落到基础 .env。
   [[ -n "${value}" ]] || value="$(_read_key "${root_dir}/.env" "$1")"
   printf '%s' "${value}"
 }
@@ -133,8 +133,7 @@ preflight() {
     ""|change-me-now) die "ADMIN_BOOTSTRAP_PASSWORD 仍是默认值：隧道会把 /api/admin/auth/login 暴露到公网（限流 10 次/5 分钟），请先在 ${env_file} 换成强口令。" ;;
   esac
   if [[ "$(read_env WECHATPAY_ENABLED)" == "true" ]]; then
-    # 与 compose 的 ${WECHATPAY_SECRET_DIR:-./secrets/wechatpay} 保持一致：
-    # 先看 shell 环境变量，再看根目录 .env（compose 插值只读 .env，脚本不会自动 source 它）。
+    # 与本机密钥目录配置保持一致：先看 shell 环境变量，再看根目录 .env。
     local secret_dir="${WECHATPAY_SECRET_DIR:-$(base_env_value WECHATPAY_SECRET_DIR)}"
     [[ -n "${secret_dir}" ]] || secret_dir="./secrets/wechatpay"
     local key_dir
@@ -276,8 +275,7 @@ restart_services() {
     warn "缺少 ${runner}，请手动重启 API / worker 使新域名生效。"
     return 0
   fi
-  # API 与 worker 是 .venv 原生进程（MySQL/Redis 才是容器）：run_local.sh 会重新加载
-  # .env 与 .env.ngrok 覆盖层，无需 build 镜像。
+  # API 与 worker 是 .venv 原生进程；run_local.sh 会重新加载 .env 与 .env.ngrok 覆盖层。
   log "重启本地 api / wechat-pay-worker（原生进程）以加载新配置……"
   if ! "${runner}" restart; then
     die "本地服务重启失败，见上方输出与 ${root_dir}/scripts/run_local.sh logs。"

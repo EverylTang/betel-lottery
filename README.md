@@ -56,21 +56,21 @@ WECHAT_APP_ID=
 WECHAT_APP_SECRET=
 WECHATPAY_MCHID=
 WECHATPAY_MCH_SERIAL_NO=
-WECHATPAY_MCH_PRIVATE_KEY_PATH=/run/secrets/wechatpay/apiclient_key.pem
+WECHATPAY_MCH_PRIVATE_KEY_PATH=./secrets/wechatpay/apiclient_key.pem
 WECHATPAY_MCH_PUBLIC_KEY_ID=
-WECHATPAY_MCH_PUBLIC_KEY_PATH=/run/secrets/wechatpay/wechatpay_public_key.pem
+WECHATPAY_MCH_PUBLIC_KEY_PATH=./secrets/wechatpay/wechatpay_public_key.pem
 WECHATPAY_API_V3_KEY=
 WECHATPAY_NOTIFY_BASE_URL=https://example.com
 H5_BASE_URL=https://example.com/scan
 ```
 
-`/run/secrets/...` 是容器内路径：compose 把宿主机 `secrets/wechatpay/` 只读挂载过去， PEM 放在 `secrets/wechatpay/apiclient_key.pem` 与 `secrets/wechatpay/wechatpay_public_key.pem`（该目录已 gitignore，不要提交私钥）。非容器部署时改成任意只读路径即可。
+本地 PEM 放在 `secrets/wechatpay/apiclient_key.pem` 与 `secrets/wechatpay/wechatpay_public_key.pem`（该目录已 gitignore，不要提交私钥）。生产环境将变量改为服务账号可读的绝对路径。
 
 想快速跑起来先看一分钟版 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)；完整变量含义与校验清单见 [`docs/configuration-checklist.md`](docs/configuration-checklist.md)。
 
 还需要在微信侧完成：公众号网页授权域名和 JS 安全域名配置（需上传 `MP_verify_*.txt` 校验文件）、商家转账产品开通、营销场景报备、商户号与公众号 AppID 绑定，以及通知地址可被公网 HTTPS 访问。
 
-正式公众号、商户号、证书、公钥、回调和上线验收步骤见 [`docs/wechat-production.md`](docs/wechat-production.md)。生产环境必须显式配置 OAuth 回调地址和支付回调基址，不能使用容器内部自动推导的地址。
+正式公众号、商户号、证书、公钥、回调和上线验收步骤见 [`docs/wechat-production.md`](docs/wechat-production.md)。生产环境必须显式配置 OAuth 回调地址和支付回调基址。
 
 常驻服务包括 MySQL、Redis、API 和 `wechat-pay-worker`。该 worker 创建、查询或撤销转账单；微信支付通知由 `/api/wechat-pay/notify` 接收并验签落库。
 
@@ -93,7 +93,9 @@ cp .env.example .env          # 已存在则跳过；.env 不入库
 ## 本地运行
 
 ```bash
-# 一行启动：MySQL/Redis（docker）+ API + worker（原生进程）
+# 仅首次初始化空数据库
+./.venv/bin/python -m scripts.init_db
+# 启动 API、worker 和三个前端；MySQL/Redis 需先由本机或外部服务提供
 ./scripts/run_local.sh --frontends
 ```
 
@@ -105,16 +107,16 @@ cp .env.example .env          # 已存在则跳过；.env 不入库
 | 用户 H5 | `http://localhost:5174/?t=<二维码token>` |
 | 经销商核销端 | `http://localhost:5175` |
 | API 文档 | `http://localhost:8000/docs` |
-| MySQL / Redis | `127.0.0.1:3306`（root 口令 `root123456`）/ `127.0.0.1:6379`（口令 `redis123456`） |
+| MySQL / Redis | 由 `.env` 中的 `DATABASE_URL` / `REDIS_URL` 指定 |
 
-`docker-compose.yml` 只跑 MySQL 与 Redis，端口绑定 `127.0.0.1` 不会暴露到局域网。API 与 wechat-pay-worker 由 `./scripts/run_local.sh` 用 `.venv` 原生启动（`uvicorn --reload` 热重载，改代码即时生效）。MySQL root 口令默认 `root123456`，Redis 口令默认 `redis123456`（均可用 `.env` 里的 `MYSQL_ROOT_PASSWORD` / `REDIS_PASSWORD` 覆盖）。本机脚本（pytest、`scripts/*`）走 `DATABASE_URL` / `REDIS_URL`（Redis 口令写在 URL 里，如 `redis://:redis123456@127.0.0.1:6379/0`）。
+API 与 wechat-pay-worker 由 `./scripts/run_local.sh` 用 `.venv` 原生启动。该脚本只检查 MySQL/Redis 连通性，不启动基础设施，也不执行数据库迁移。首次使用空库时，先按数据库初始化说明手动创建表；已有数据库升级也必须手动执行并核对迁移。应用启动只会在管理员账号不存在时创建初始管理员。
 
 也可分别启动：
 
 ```bash
 ./.venv/bin/uvicorn app.main:app --reload        # 只启动 API
-./scripts/run_local.sh api                        # 启动 MySQL/Redis + API
-./scripts/run_local.sh worker                     # 启动 MySQL/Redis + worker
+./scripts/run_local.sh api                        # 检查依赖后只启动 API
+./scripts/run_local.sh worker                     # 检查依赖后只启动 worker
 npm --prefix frontend/admin run dev               # 管理后台
 npm --prefix frontend/h5 run dev                  # 用户 H5
 npm --prefix frontend/dealer run dev              # 经销商核销端
@@ -151,7 +153,7 @@ NGROK_DOMAIN=promo.ngrok.app ./scripts/run_ngrok_local.sh   # 使用预留固定
 后台登录限流、抽奖风控和审计日志都按客户端 IP 记账。`TRUST_PROXY_HEADERS=true`（默认）时，API 只在请求**直接来自**内置受信代理网段（回环 + RFC1918/RFC4193 + 链路本地，见 `app/core/http.py` 的 `TRUSTED_PROXY_NETWORKS`）时才采信 `X-Forwarded-For`，否则回退到 socket 对端地址，避免任意调用方伪造 IP 绕过限流。
 
 - 本地直连（本机 `curl 127.0.0.1:8000`）：`127.0.0.1` 在默认受信网段内，能正确取到 IP。
-- 内网反向代理/容器网络：来源是 `172.16.0.0/12`、`10.0.0.0/8` 等 RFC1918 网段，已在默认白名单内；如果你的代理用了公网地址，需在该常量里补上对应网段，否则 IP 会退化成代理地址。
+- 内网反向代理：来源是 `172.16.0.0/12`、`10.0.0.0/8` 等 RFC1918 网段，已在默认白名单内；如果你的代理用了公网地址，需在该常量里补上对应网段，否则 IP 会退化成代理地址。
 - nginx / ngrok：TLS 在代理侧终止，代理必须用 `proxy_set_header X-Forwarded-For $remote_addr;` **覆盖**而非追加该头，否则客户端可自带伪造值。详见 [`docs/wechat-production.md`](docs/wechat-production.md)。
 
 ## 验证
@@ -162,6 +164,5 @@ NGROK_DOMAIN=promo.ngrok.app ./scripts/run_ngrok_local.sh   # 使用预留固定
 npm --prefix frontend/admin run build
 npm --prefix frontend/h5 run build
 npm --prefix frontend/dealer run build
-docker compose config --quiet          # 校验 compose 文件与变量插值
 ./scripts/run_ngrok_local.sh check     # ngrok 联调配置一致性体检（未用隧道可跳过）
 ```

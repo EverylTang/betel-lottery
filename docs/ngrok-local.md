@@ -8,7 +8,7 @@
                        └── /api/**     → 127.0.0.1:8000
 ```
 
-这样 OAuth 回调和微信支付通知共用同一个公网 HTTPS 域名。**不要**把 MySQL(3306)、Redis(6379)、管理后台(5173) 或 API 端口本身挂到隧道上；docker-compose.yml 已把这些端口只绑定到 `127.0.0.1`。
+这样 OAuth 回调和微信支付通知共用同一个公网 HTTPS 域名。**不要**把 MySQL、Redis、管理后台(5173) 或 API 端口本身挂到隧道上；只暴露 H5 开发服务器，由 Vite 代理 `/api`。
 
 ## 配置分层：`.env` + `.env.ngrok`
 
@@ -18,7 +18,7 @@
 | `.env.ngrok` | ngrok 联调**覆盖层**，只放隧道差异项 | 否（`.gitignore`） |
 | `.env.ngrok.example` | 覆盖层模板，脚本在缺失时自动复制 | 是 |
 
-`./scripts/run_local.sh` 启动时会先导出 `.env.ngrok`（如存在），再启动 API/worker——后出现的文件覆盖先出现的，与旧 compose 行为一致。删除 `.env.ngrok` 即回到纯本机模式。
+`./scripts/run_local.sh` 启动时会先导出 `.env.ngrok`（如存在），再启动 API/worker——后出现的文件覆盖先出现的。删除 `.env.ngrok` 即回到纯本机模式。
 
 > 关键约束：覆盖层里的 `JWT_SECRET` 必须与 `.env` 一致。二维码 `token_ciphertext`、中奖 token、会话都由它派生加密，改动会让已印刷二维码解密失败并踢掉全部登录态。
 
@@ -27,8 +27,9 @@
 ## 前置条件
 
 1. 安装 ngrok 3.x 并执行一次 `ngrok config add-authtoken <token>`。token 只存在 ngrok 本机配置里，不要写进仓库。
-2. 启动本地依赖与 API：
+2. 启动本机 MySQL/Redis 服务，并完成空库初始化（首次使用时），再启动 API：
    ```bash
+   ./.venv/bin/python -m scripts.init_db
    ./scripts/run_local.sh
    ```
 3. 从公众号后台下载域名归属校验文件 `MP_verify_xxxxxxxx.txt`，放到 `frontend/h5/public/`。隧道下它随 H5 一起被 Vite 发布，微信保存「网页授权域名 / JS 接口安全域名」时会请求 `https://<域名>/MP_verify_xxxxxxxx.txt`。
@@ -97,10 +98,10 @@ ngrok 免费套餐会给**浏览器 User-Agent**注入「You are about to visit 
 
 ## 客户端真实 IP
 
-ngrok 会用 `X-Forwarded-For` 携带真实公网 IP。`TRUST_PROXY_HEADERS=true`（覆盖层默认）时，API 只在请求直接来自受信代理网段（`app/core/http.py` 的 `TRUSTED_PROXY_NETWORKS`：回环 + RFC1918/RFC4193 + 链路本地）时才采信该头，管理后台登录限流、抽奖风控与审计日志因此记录真实 IP 而不是容器网段地址。可用下面的键验证：
+ngrok 会用 `X-Forwarded-For` 携带真实公网 IP。`TRUST_PROXY_HEADERS=true`（覆盖层默认）时，API 只在请求直接来自受信代理网段（`app/core/http.py` 的 `TRUSTED_PROXY_NETWORKS`：回环 + RFC1918/RFC4193 + 链路本地）时才采信该头，管理后台登录限流、抽奖风控与审计日志因此记录真实 IP。可用下面的命令查看限流键：
 
 ```bash
-docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD:-redis123456}" --scan --pattern 'rate:admin-login:*'
+./.venv/bin/python -c 'from app.cache import redis_client; print(list(redis_client.scan_iter(match="rate:admin-login:*")))'
 ```
 
 出现 `rate:admin-login:<公网IP>...` 即正确；出现 `172.x`/`Unknown` 说明头没透传或代理网段未信任。
